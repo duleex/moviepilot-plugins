@@ -31,13 +31,14 @@
     "name": "缺集监测",
     "description": "定时监测 MP 订阅缺集，用 NextFind 搜索补全（支持 ed2k/115 拆包转存）；NF 没有就算了，不触发 PT 下载。",
     "labels": "订阅,资源管理",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "icon": "nfmissingmonitor.png",
     "author": "duleex",
     "level": 1,
     "system_version": ">=2.12.0",
     "history": {
-      "v1.0.0": "初始版本：订阅缺集用 NF 补全，不启用 PT 下载"
+      "v1.0.0": "初始版本：订阅缺集用 NF 补全，不启用 PT 下载",
+      "v1.1.0": "详情页 UI 精简：状态条小字化、统计卡手机 2×2、筛选标签选中高亮+列表过滤、分页文字上移、卡片紧凑化+暗色适配"
     }
   },
   "UserSyncFromEmby": {
