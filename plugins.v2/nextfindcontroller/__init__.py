@@ -49,7 +49,7 @@ class NextFindController(_PluginBase):
     plugin_name = "NextFind 控制器"
     plugin_desc = "通过 Agent 对话控制 NextFind（NF）的搜索、订阅、转存、额度查询等 API 能力；并可自动订阅指定频道转存入库的新资源。"
     plugin_icon = "nextfindcontroller.png"
-    plugin_version = "1.1.0"
+    plugin_version = "1.2.0"
     plugin_label = "智能体,资源管理"
     plugin_author = "local"
     plugin_config_prefix = "nextfindcontroller_"
@@ -206,7 +206,7 @@ class NextFindController(_PluginBase):
             """顶部统计卡片。"""
             return {
                 "component": "VCol",
-                "props": {"cols": 12, "sm": 6, "md": 3},
+                "props": {"cols": 6, "sm": 6, "md": 3},
                 "content": [
                     {
                         "component": "VCard",
@@ -266,8 +266,8 @@ class NextFindController(_PluginBase):
                 "component": "VImg",
                 "props": {
                     "src": poster,
-                    "height": 132,
-                    "width": 88,
+                    "height": 114,
+                    "width": 76,
                     "aspect-ratio": "2/3",
                     "class": "rounded flex-shrink-0",
                     "cover": True
@@ -275,8 +275,8 @@ class NextFindController(_PluginBase):
             } if poster else {
                 "component": "div",
                 "props": {
-                    "class": "d-flex align-center justify-center rounded bg-grey-lighten-3 text-caption text-medium-emphasis flex-shrink-0",
-                    "style": {"width": "88px", "height": "132px"}
+                    "class": "d-flex align-center justify-center rounded bg-surface-variant text-caption text-medium-emphasis flex-shrink-0",
+                    "style": {"width": "76px", "height": "114px"}
                 },
                 "text": "无海报"
             }
@@ -286,7 +286,7 @@ class NextFindController(_PluginBase):
                 "content": [
                     {
                         "component": "div",
-                        "props": {"class": "d-flex flex-nowrap ga-3 pa-3"},
+                        "props": {"class": "d-flex flex-nowrap ga-2 pa-2"},
                         "content": [
                             poster_node,
                             {
@@ -312,7 +312,7 @@ class NextFindController(_PluginBase):
                                     },
                                     {
                                         "component": "div",
-                                        "props": {"class": "text-caption text-medium-emphasis mt-1"},
+                                        "props": {"class": "text-caption text-medium-emphasis mt-1 text-truncate"},
                                         "text": " · ".join(info_parts) if info_parts else ""
                                     }
                                 ]
@@ -323,14 +323,14 @@ class NextFindController(_PluginBase):
             }
 
         def sub_window(items: List[dict]) -> dict:
-            """订阅卡片分页网格（每页 8 条）。"""
+            """订阅卡片分页网格（每页 12 条）。"""
             if not items:
                 return {
                     "component": "div",
                     "props": {"class": "text-center pa-4 text-medium-emphasis"},
                     "text": "暂无订阅"
                 }
-            page_size = 8
+            page_size = 12
             pages = [items[i:i + page_size] for i in range(0, len(items), page_size)]
             page_items = []
             for idx, page_records in enumerate(pages, start=1):
@@ -339,15 +339,7 @@ class NextFindController(_PluginBase):
                     "content": [
                         {
                             "component": "div",
-                            "props": {"class": "d-flex justify-space-between align-center mb-2 text-caption text-medium-emphasis"},
-                            "content": [
-                                {"component": "span", "text": f"第 {idx} / {len(pages)} 页"},
-                                {"component": "span", "text": f"本页 {len(page_records)} 条"}
-                            ]
-                        },
-                        {
-                            "component": "div",
-                            "props": {"class": "grid gap-3 grid-info-card"},
+                            "props": {"class": "grid gap-2 grid-info-card"},
                             "content": [sub_card(s) for s in page_records]
                         }
                     ]
@@ -376,7 +368,7 @@ class NextFindController(_PluginBase):
                 elif re.search(r"\[(WARN|WARNING)\]", line):
                     cls += " text-orange-darken-1"
                 elif re.search(r"\[DEBUG\]", line):
-                    cls += " text-grey-darken-1"
+                    cls += " text-medium-emphasis"
                 return {
                     "component": "div",
                     "props": {
@@ -400,8 +392,8 @@ class NextFindController(_PluginBase):
                 {
                     "component": "div",
                     "props": {
-                        "class": "bg-grey-lighten-4 rounded pa-3",
-                        "style": {"max-height": "420px", "overflow-y": "auto"}
+                        "class": "bg-surface-variant rounded pa-2",
+                        "style": {"max-height": "380px", "overflow-y": "auto"}
                     },
                     "content": [log_line_node(line) for line in log_rows]
                 }
@@ -455,6 +447,10 @@ class NextFindController(_PluginBase):
                 })
         auto_tv = sum(1 for i in auto_items if i.get("media_type") == "电视剧")
         auto_movie = sum(1 for i in auto_items if i.get("media_type") == "电影")
+        # 分页信息（每页 12 条，展示在面板标题右侧）
+        auto_pages = (len(auto_items) + 11) // 12
+        tv_pages = (len(tv_subs) + 11) // 12
+        movie_pages = (len(movie_subs) + 11) // 12
 
         def auto_card(item: dict) -> dict:
             """自动订阅卡片：海报 + 标题 + 类型/状态 + 进度 + 订阅时间。"""
@@ -478,8 +474,8 @@ class NextFindController(_PluginBase):
                 "component": "VImg",
                 "props": {
                     "src": item.get("poster"),
-                    "height": 132,
-                    "width": 88,
+                    "height": 114,
+                    "width": 76,
                     "aspect-ratio": "2/3",
                     "class": "rounded flex-shrink-0",
                     "cover": True
@@ -487,8 +483,8 @@ class NextFindController(_PluginBase):
             } if item.get("poster") else {
                 "component": "div",
                 "props": {
-                    "class": "d-flex align-center justify-center rounded bg-grey-lighten-3 text-caption text-medium-emphasis flex-shrink-0",
-                    "style": {"width": "88px", "height": "132px"}
+                    "class": "d-flex align-center justify-center rounded bg-surface-variant text-caption text-medium-emphasis flex-shrink-0",
+                    "style": {"width": "76px", "height": "114px"}
                 },
                 "text": "无海报"
             }
@@ -498,7 +494,7 @@ class NextFindController(_PluginBase):
                 "content": [
                     {
                         "component": "div",
-                        "props": {"class": "d-flex flex-nowrap ga-3 pa-3"},
+                        "props": {"class": "d-flex flex-nowrap ga-2 pa-2"},
                         "content": [
                             poster_node,
                             {
@@ -507,12 +503,12 @@ class NextFindController(_PluginBase):
                                 "content": [
                                     {
                                         "component": "div",
-                                        "props": {"class": "text-subtitle-2 font-weight-bold text-truncate mb-2"},
+                                        "props": {"class": "text-subtitle-2 font-weight-bold text-truncate mb-1"},
                                         "content": [title_node]
                                     },
                                     {
                                         "component": "div",
-                                        "props": {"class": "d-flex flex-wrap ga-1 mb-2"},
+                                        "props": {"class": "d-flex flex-wrap ga-1 mb-1"},
                                         "content": [
                                             {
                                                 "component": "VChip",
@@ -528,7 +524,7 @@ class NextFindController(_PluginBase):
                                     },
                                     {
                                         "component": "div",
-                                        "props": {"class": "text-body-2 mb-1"},
+                                        "props": {"class": "text-body-2 mb-1 text-truncate"},
                                         "text": item.get("progress")
                                     },
                                     {
@@ -544,14 +540,14 @@ class NextFindController(_PluginBase):
             }
 
         def auto_window() -> dict:
-            """自动订阅卡片分页网格（每页 8 条）。"""
+            """自动订阅卡片分页网格（每页 12 条）。"""
             if not auto_items:
                 return {
                     "component": "div",
                     "props": {"class": "text-center pa-4 text-medium-emphasis"},
                     "text": "暂无自动订阅记录"
                 }
-            page_size = 8
+            page_size = 12
             pages = [auto_items[i:i + page_size] for i in range(0, len(auto_items), page_size)]
             page_nodes = []
             for idx, page_records in enumerate(pages, start=1):
@@ -560,15 +556,7 @@ class NextFindController(_PluginBase):
                     "content": [
                         {
                             "component": "div",
-                            "props": {"class": "d-flex justify-space-between align-center mb-2 text-caption text-medium-emphasis"},
-                            "content": [
-                                {"component": "span", "text": f"第 {idx} / {len(pages)} 页"},
-                                {"component": "span", "text": f"本页 {len(page_records)} 条"}
-                            ]
-                        },
-                        {
-                            "component": "div",
-                            "props": {"class": "grid gap-3 grid-info-card"},
+                            "props": {"class": "grid gap-2 grid-info-card"},
                             "content": [auto_card(item) for item in page_records]
                         }
                     ]
@@ -582,7 +570,7 @@ class NextFindController(_PluginBase):
         auto_panel = {
             "component": "VExpansionPanel",
             "content": [
-                {"component": "VExpansionPanelTitle", "text": f"自动订阅（{len(auto_items)}）· 电视剧 {auto_tv} / 电影 {auto_movie}"},
+                {"component": "VExpansionPanelTitle", "text": f"自动订阅（{len(auto_items)}）· 电视剧 {auto_tv} / 电影 {auto_movie} · {auto_pages} 页"},
                 {"component": "VExpansionPanelText", "content": [auto_window()]}
             ]
         }
@@ -611,14 +599,14 @@ class NextFindController(_PluginBase):
                         {
                             "component": "VExpansionPanel",
                             "content": [
-                                {"component": "VExpansionPanelTitle", "text": f"电视剧订阅（{len(tv_subs)}）· 已入库 {tv_in_lib} / 订阅中 {len(tv_subs) - tv_in_lib}"},
+                                {"component": "VExpansionPanelTitle", "text": f"电视剧订阅（{len(tv_subs)}）· 已入库 {tv_in_lib} / 订阅中 {len(tv_subs) - tv_in_lib} · {tv_pages} 页"},
                                 {"component": "VExpansionPanelText", "content": [sub_window(tv_subs)]}
                             ]
                         },
                         {
                             "component": "VExpansionPanel",
                             "content": [
-                                {"component": "VExpansionPanelTitle", "text": f"电影订阅（{len(movie_subs)}）· 已入库 {movie_in_lib} / 订阅中 {len(movie_subs) - movie_in_lib}"},
+                                {"component": "VExpansionPanelTitle", "text": f"电影订阅（{len(movie_subs)}）· 已入库 {movie_in_lib} / 订阅中 {len(movie_subs) - movie_in_lib} · {movie_pages} 页"},
                                 {"component": "VExpansionPanelText", "content": [sub_window(movie_subs)]}
                             ]
                         },
