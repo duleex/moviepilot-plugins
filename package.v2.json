@@ -3,14 +3,15 @@
     "name": "NextFind 控制器",
     "description": "通过 Agent 对话控制 NextFind（NF）的搜索、订阅、转存、额度查询等 API 能力；并可自动订阅指定频道转存入库的新资源。",
     "labels": "智能体,资源管理",
-    "version": "1.1.0",
+    "version": "1.2.0",
     "icon": "nextfindcontroller.png",
     "author": "duleex",
     "level": 1,
     "system_version": ">=2.12.0",
     "history": {
       "v1.0.0": "初始版本：提供 NextFind API 的 Agent 工具集",
-      "v1.1.0": "合并 NF 入库自动订阅：轮询入库历史自动建订阅（频道/类型过滤），详情页增加自动订阅海报卡片"
+      "v1.1.0": "合并 NF 入库自动订阅：轮询入库历史自动建订阅（频道/类型过滤），详情页增加自动订阅海报卡片",
+      "v1.2.0": "详情页 UI 精简：统计卡手机 2 列、分页信息并入面板标题、卡片紧凑化、日志区暗色主题适配"
     }
   },
   "NextEmbyController": {
