@@ -12,5 +12,18 @@
       "v1.0.0": "初始版本：提供 NextFind API 的 Agent 工具集",
       "v1.1.0": "合并 NF 入库自动订阅：轮询入库历史自动建订阅（频道/类型过滤），详情页增加自动订阅海报卡片"
     }
+  },
+  "NextEmbyController": {
+    "name": "NE 控制器",
+    "description": "通过 Agent 对话控制 NextEmby（NE）的系统监控、用户管理与会话控制等 API 能力。",
+    "labels": "智能体,系统工具",
+    "version": "1.0.0",
+    "icon": "nextembycontroller.png",
+    "author": "duleex",
+    "level": 1,
+    "system_version": ">=2.12.0",
+    "history": {
+      "v1.0.0": "初始版本：提供 NextEmby API 的两个 Agent 工具（监控/管理）"
+    }
   }
 }
