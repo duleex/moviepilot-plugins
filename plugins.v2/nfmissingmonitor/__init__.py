@@ -29,7 +29,7 @@ class NfMissingMonitor(_PluginBase):
     plugin_name = "缺集监测"
     plugin_desc = "定时监测 MP 订阅缺集，用 NextFind 搜索补全（支持 ed2k/115 拆包转存）并可选洗版；同时兜底 NextFind 订阅列表，NF 找不到的资源由 MoviePilot 创建订阅搜索下载。"
     plugin_icon = "nfmissingmonitor.png"
-    plugin_version = "1.0.0"
+    plugin_version = "1.1.0"
     plugin_label = "订阅,资源管理,智能体"
     plugin_author = "local"
     plugin_config_prefix = "nfmissingmonitor_"
@@ -51,6 +51,8 @@ class NfMissingMonitor(_PluginBase):
     _search_nf_first = True
     # 兜底检查间隔（分钟），interval 触发器显式传 seconds，避免 APScheduler 0 间隔退化为每秒触发
     _check_interval = 30
+    # 详情页筛选状态（纯前端展示，存 plugindata 持久化）：all/tv/movie/missing/full/movie_missing
+    _page_filter = "all"
     # 内存去重缓存（已转存 key 集合），init 时从 plugindata 加载
     _nf_done = set()
     # NF 无资源订阅缓存：{tmdb_id: timestamp}，记录首次确认无资源的时间（确认期内不重复查询）
@@ -88,6 +90,7 @@ class NfMissingMonitor(_PluginBase):
         self._migrate_legacy_data()
         self._nf_done = set((self.get_data("nf_transferred") or {}).keys())
         self._no_resource_cache = self.get_data("nf_no_resource") or {}
+        self._page_filter = str(self.get_data("page_filter") or "all") or "all"
         if not config:
             return
         self._enabled = bool(config.get("enabled"))
@@ -175,8 +178,28 @@ class NfMissingMonitor(_PluginBase):
                 "summary": "搜索单个订阅缺集",
                 "description": "对指定订阅单独执行缺集 NF 搜索补全",
                 "auth": "bear",
+            },
+            {
+                "path": "/set_filter",
+                "endpoint": self.api_set_filter,
+                "methods": ["POST"],
+                "summary": "设置详情页筛选状态",
+                "description": "仅保存前端筛选标签的选中状态（all/tv/movie/missing/full/movie_missing），不影响任何业务逻辑",
+                "auth": "bear",
             }
         ]
+
+    def api_set_filter(self, payload: dict) -> Response:
+        """保存详情页筛选状态（纯前端交互，不涉及业务逻辑）。"""
+        f = (payload or {}).get("filter") or "all"
+        if f not in ("all", "tv", "movie", "missing", "full", "movie_missing"):
+            f = "all"
+        self._page_filter = f
+        try:
+            self.save_data("page_filter", f)
+        except Exception as err:
+            logger.error(f"保存筛选状态失败：{err}")
+        return Response(success=True, message=f"筛选已切换：{f}")
 
     def api_check_missing(self) -> Response:
         """异步触发缺集监测检查（详情页「搜索缺集」按钮调用）。"""
@@ -369,45 +392,20 @@ class NfMissingMonitor(_PluginBase):
         # 补录存量订阅（filter_groups 匹配）
         self._backfill_history()
         history = self.get_data("subscribe_history") or {}
-        # 顶部状态说明 + 搜索缺集按钮
+        # 顶部小字状态条（原大块提示气泡压缩为一行，腾出空间给订阅列表）
         status_nodes = [
             {
                 "component": "div",
-                "props": {"class": "d-flex justify-space-between align-center ga-2 mb-2"},
-                "content": [
-                    {
-                        "component": "VAlert",
-                        "props": {
-                            "type": "info",
-                            "class": "flex-grow-1",
-                            "text": (
-                                f"缺集监测：{self._interval} 分钟/次"
-                                + ("（日历过滤，只搜已播出缺集）" if self._calendar_filter else "")
-                                + f"；NF 无资源满 {self._pt_after_days} 天转 PT"
-                                + ("；洗版已启用" if self._wash_enabled else "")
-                                + f"；兜底检查：{self._check_interval} 分钟/次（失败≥{self._fail_threshold} 或缺集）"
-                            )
-                        }
-                    },
-                    {
-                        "component": "VBtn",
-                        "props": {
-                            "color": "primary",
-                            "variant": "tonal",
-                            "prepend-icon": "mdi-magnify",
-                            "size": "small",
-                            "class": "flex-shrink-0"
-                        },
-                        "text": "搜索缺集",
-                        "events": {
-                            "click": {
-                                "api": "plugin/NfMissingMonitor/check_missing",
-                                "method": "POST",
-                                "params": {}
-                            }
-                        }
-                    }
-                ]
+                "props": {
+                    "class": "text-caption text-medium-emphasis text-truncate mb-2"
+                },
+                "text": (
+                    f"缺集监测：{self._interval} 分钟/次"
+                    + ("（日历过滤，只搜已播出缺集）" if self._calendar_filter else "")
+                    + f"；NF 无资源满 {self._pt_after_days} 天转 PT"
+                    + ("；洗版已启用" if self._wash_enabled else "")
+                    + f"；兜底检查：{self._check_interval} 分钟/次（失败≥{self._fail_threshold} 或缺集）"
+                )
             }
         ]
         if not history:
@@ -561,29 +559,90 @@ class NfMissingMonitor(_PluginBase):
             1 for item in items
             if item.get("media_type") == "电影" and "未入库" in item.get("progress", "")
         )
-        # 资源状态速查栏
+        # 按详情页筛选状态过滤列表（统计卡保持全量数字，仅列表与分页跟随筛选）
+        _filter = getattr(self, "_page_filter", "all") or "all"
+        if _filter == "tv":
+            filtered = [i for i in items if i.get("media_type") == "电视剧"]
+        elif _filter == "movie":
+            filtered = [i for i in items if i.get("media_type") == "电影"]
+        elif _filter == "missing":
+            filtered = [
+                i for i in items
+                if i.get("state") != "REMOVED"
+                and "已全" not in i.get("progress")
+                and "已入库" not in i.get("progress")
+                and "已订阅" not in i.get("progress")
+                and "连载中" != i.get("progress")
+            ]
+        elif _filter == "full":
+            filtered = [i for i in items if "已全" in i.get("progress", "")]
+        elif _filter == "movie_missing":
+            filtered = [i for i in items if i.get("media_type") == "电影" and "未入库" in i.get("progress", "")]
+        else:
+            filtered = items
+        page_size = 12
+        pages = [filtered[index:index + page_size] for index in range(0, len(filtered), page_size)]
+        # 资源状态速查栏（筛选标签选中高亮 + 右侧分页文字）
+        filter_defs = [
+            ("all", "primary", f"全部 {len(items)}"),
+            ("tv", "indigo", f"电视剧 {tv_count}"),
+            ("movie", "deep-orange", f"电影 {movie_count}"),
+            ("missing", "orange", f"缺集中 {missing_count}"),
+            ("full", "teal", f"已全 {full_count}"),
+            ("movie_missing", "error", f"电影未入库 {movie_missing}"),
+        ]
         status_bar = [
             {
-                "component": "VChipGroup",
-                "props": {"class": "mb-2"},
+                "component": "VRow",
+                "props": {"class": "d-flex align-center mb-2", "no-gutters": True},
                 "content": [
-                    {"component": "VChip", "props": {"variant": "tonal", "color": "primary"}, "text": f"全部 {len(items)}"},
-                    {"component": "VChip", "props": {"variant": "tonal", "color": "indigo"}, "text": f"电视剧 {tv_count}"},
-                    {"component": "VChip", "props": {"variant": "tonal", "color": "deep-orange"}, "text": f"电影 {movie_count}"},
-                    {"component": "VChip", "props": {"variant": "tonal", "color": "orange"}, "text": f"缺集中 {missing_count}"},
-                    {"component": "VChip", "props": {"variant": "tonal", "color": "teal"}, "text": f"已全 {full_count}"},
-                    {"component": "VChip", "props": {"variant": "tonal", "color": "error"}, "text": f"电影未入库 {movie_missing}"},
+                    {
+                        "component": "VCol",
+                        "props": {"cols": 12, "md": 9, "class": "d-flex align-center"},
+                        "content": [
+                            {
+                                "component": "VChipGroup",
+                                "props": {"class": "flex-grow-1"},
+                                "content": [
+                                    {
+                                        "component": "VChip",
+                                        "props": {
+                                            "variant": "flat" if _filter == key else "tonal",
+                                            "color": color,
+                                            "class": "px-2",
+                                        },
+                                        "text": text,
+                                        "events": {
+                                            "click": {
+                                                "api": "plugin/NfMissingMonitor/set_filter",
+                                                "method": "POST",
+                                                "params": {"filter": key}
+                                            }
+                                        }
+                                    }
+                                    for key, color, text in filter_defs
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        "component": "VCol",
+                        "props": {"cols": 12, "md": 3, "class": "d-flex align-center justify-md-end justify-start text-caption text-medium-emphasis"},
+                        "content": [
+                            {"component": "span", "text": f"共 {len(filtered)} 条 · {len(pages)} 页"}
+                        ]
+                    }
                 ]
             }
         ]
 
-        def stat_card(title: str, value: str, color: str) -> dict:
+        def stat_card(title: str, value: str, color: str, value_class: str = "") -> dict:
             """顶部统计卡片，帮助快速掌握订阅规模。"""
             return {
                 "component": "VCol",
                 "props": {
-                    "cols": 12,
-                    "md": 3
+                    "cols": 6,
+                    "md": 2
                 },
                 "content": [
                     {
@@ -591,20 +650,20 @@ class NfMissingMonitor(_PluginBase):
                         "props": {
                             "variant": "tonal",
                             "color": color,
-                            "class": "pa-2"
+                            "class": "pa-1"
                         },
                         "content": [
                             {
                                 "component": "VCardSubtitle",
                                 "props": {
-                                    "class": "pb-0"
+                                    "class": "pb-0 text-caption"
                                 },
                                 "text": title
                             },
                             {
                                 "component": "VCardTitle",
                                 "props": {
-                                    "class": "text-h6 pt-1"
+                                    "class": f"text-h6 pt-1 font-weight-bold {value_class}".strip()
                                 },
                                 "text": value
                             }
@@ -628,8 +687,8 @@ class NfMissingMonitor(_PluginBase):
                 "component": "VImg",
                 "props": {
                     "src": item.get("poster"),
-                    "height": 132,
-                    "width": 88,
+                    "height": 114,
+                    "width": 76,
                     "aspect-ratio": "2/3",
                     "class": "rounded flex-shrink-0",
                     "cover": True
@@ -637,10 +696,10 @@ class NfMissingMonitor(_PluginBase):
             } if item.get("poster") else {
                 "component": "div",
                 "props": {
-                    "class": "d-flex align-center justify-center rounded bg-grey-lighten-3 text-caption text-medium-emphasis flex-shrink-0",
+                    "class": "d-flex align-center justify-center rounded bg-surface-variant text-caption text-medium-emphasis flex-shrink-0",
                     "style": {
-                        "width": "88px",
-                        "height": "132px"
+                        "width": "76px",
+                        "height": "114px"
                     }
                 },
                 "text": "无海报"
@@ -655,7 +714,7 @@ class NfMissingMonitor(_PluginBase):
                     {
                         "component": "div",
                         "props": {
-                            "class": "d-flex flex-nowrap ga-3 pa-3"
+                            "class": "d-flex flex-nowrap ga-2 pa-2"
                         },
                         "content": [
                             poster_node,
@@ -668,14 +727,14 @@ class NfMissingMonitor(_PluginBase):
                                     {
                                         "component": "div",
                                         "props": {
-                                            "class": "text-subtitle-2 font-weight-bold text-truncate mb-2"
+                                            "class": "text-subtitle-2 font-weight-bold text-truncate mb-1"
                                         },
                                         "content": [title_node]
                                     },
                                     {
                                         "component": "div",
                                         "props": {
-                                            "class": "d-flex flex-wrap ga-1 mb-2"
+                                            "class": "d-flex flex-wrap ga-1 mb-1"
                                         },
                                         "content": [
                                             {
@@ -701,7 +760,7 @@ class NfMissingMonitor(_PluginBase):
                                     {
                                         "component": "div",
                                         "props": {
-                                            "class": "text-body-2 mb-1"
+                                            "class": "text-body-2 mb-1 text-truncate"
                                         },
                                         "text": item.get("progress")
                                     },
@@ -737,8 +796,6 @@ class NfMissingMonitor(_PluginBase):
                 ]
             }
 
-        page_size = 8
-        pages = [items[index:index + page_size] for index in range(0, len(items), page_size)]
         page_items = []
         for page_index, page_records in enumerate(pages, start=1):
             page_items.append({
@@ -747,23 +804,7 @@ class NfMissingMonitor(_PluginBase):
                     {
                         "component": "div",
                         "props": {
-                            "class": "d-flex justify-space-between align-center mb-2 text-caption text-medium-emphasis"
-                        },
-                        "content": [
-                            {
-                                "component": "span",
-                                "text": f"第 {page_index} / {len(pages)} 页"
-                            },
-                            {
-                                "component": "span",
-                                "text": f"本页 {len(page_records)} 条"
-                            }
-                        ]
-                    },
-                    {
-                        "component": "div",
-                        "props": {
-                            "class": "grid gap-3 grid-info-card"
+                            "class": "grid gap-2 grid-info-card"
                         },
                         "content": [subscribe_card(item) for item in page_records]
                     }
@@ -774,13 +815,37 @@ class NfMissingMonitor(_PluginBase):
             {
                 "component": "VRow",
                 "props": {
-                    "class": "mb-2"
+                    "class": "mb-2 align-center"
                 },
                 "content": [
                     stat_card("NF 订阅", f"{len(items)} 条", "primary"),
                     stat_card("电影", f"{movie_count} 条", "deep-orange"),
                     stat_card("电视剧", f"{tv_count} 条", "indigo"),
-                    stat_card("连载中/缺集中", f"{missing_count} 条", "teal"),
+                    stat_card("缺集中", f"{missing_count} 条", "orange",
+                              "text-orange-darken-2"),
+                    {
+                        "component": "VCol",
+                        "props": {"cols": 12, "md": 4, "class": "d-flex align-center justify-md-end justify-start"},
+                        "content": [
+                            {
+                                "component": "VBtn",
+                                "props": {
+                                    "color": "primary",
+                                    "variant": "tonal",
+                                    "prepend-icon": "mdi-magnify",
+                                    "size": "small"
+                                },
+                                "text": "搜索缺集",
+                                "events": {
+                                    "click": {
+                                        "api": "plugin/NfMissingMonitor/check_missing",
+                                        "method": "POST",
+                                        "params": {}
+                                    }
+                                }
+                            }
+                        ]
+                    }
                 ]
             },
             {
