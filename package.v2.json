@@ -38,5 +38,18 @@
     "history": {
       "v1.0.0": "初始版本：订阅缺集用 NF 补全，不启用 PT 下载"
     }
+  },
+  "UserSyncFromEmby": {
+    "name": "Emby 用户同步",
+    "description": "Emby 创建用户后自动在 MoviePilot 创建同名用户；同步用户仅授权订阅，禁止搜索 PT 站点资源。",
+    "labels": "用户管理,媒体服务器",
+    "version": "1.0.0",
+    "icon": "usersyncfromemby.png",
+    "author": "duleex",
+    "level": 1,
+    "system_version": ">=2.12.0",
+    "history": {
+      "v1.0.0": "初始版本：Emby 用户自动同步到 MP，仅订阅权限禁止搜索"
+    }
   }
 }
