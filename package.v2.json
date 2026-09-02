@@ -18,13 +18,16 @@
     "name": "NE 控制器",
     "description": "通过 Agent 对话控制 NextEmby（NE）的系统监控、用户管理与会话控制等 API 能力。",
     "labels": "智能体,系统工具",
-    "version": "1.0.0",
+    "version": "1.3.0",
     "icon": "nextembycontroller.png",
     "author": "duleex",
     "level": 1,
     "system_version": ">=2.12.0",
     "history": {
-      "v1.0.0": "初始版本：提供 NextEmby API 的两个 Agent 工具（监控/管理）"
+      "v1.0.0": "初始版本：提供 NextEmby API 的两个 Agent 工具（监控/管理）",
+      "v1.1.0": "配置页新增 NE 管理员账号密码，后端自动登录获取管理会话，并在 AutoCard 面板探测管理接口",
+      "v1.2.0": "接入真实 AutoCard 管理接口，详情页展示卡密批次、剩余数量及脱敏使用记录",
+      "v1.3.0": "NE 控制室新增创建用户与生成 AutoCard 卡密；支持用户密码、Cookie、缓存目录、额度、模板和备注，并安全展示最近生成批次"
     }
   },
   "NfMissingMonitor": {
