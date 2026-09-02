@@ -5,6 +5,8 @@ import re
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
+import requests
+
 from app.log import logger
 from app.plugins import _PluginBase
 from app.schemas import Response
@@ -19,7 +21,7 @@ class NextEmbyController(_PluginBase):
     plugin_name = "NE 控制器"
     plugin_desc = "通过 Agent 对话控制 NextEmby（NE）的系统监控、用户管理与会话控制等 API 能力。"
     plugin_icon = "nextembycontroller.png"
-    plugin_version = "1.0.0"
+    plugin_version = "1.3.0"
     plugin_label = "智能体,系统工具"
     plugin_author = "local"
     plugin_config_prefix = "nextembycontroller_"
@@ -29,6 +31,8 @@ class NextEmbyController(_PluginBase):
     _enabled = False
     _api_url = ""
     _api_key = ""
+    _admin_username = ""
+    _admin_password = ""
 
     def init_plugin(self, config: dict = None) -> None:
         """根据插件配置初始化运行状态。"""
@@ -36,11 +40,15 @@ class NextEmbyController(_PluginBase):
         self._enabled = False
         self._api_url = ""
         self._api_key = ""
+        self._admin_username = ""
+        self._admin_password = ""
         if not config:
             return
         self._enabled = bool(config.get("enabled"))
         self._api_url = str(config.get("api_url") or "").rstrip("/")
         self._api_key = str(config.get("api_key") or "")
+        self._admin_username = str(config.get("admin_username") or "").strip()
+        self._admin_password = str(config.get("admin_password") or "")
 
     def get_state(self) -> bool:
         """获取插件启用状态。"""
@@ -94,6 +102,22 @@ class NextEmbyController(_PluginBase):
                 "description": "按全部/在线/异常/到期筛选用户列表",
                 "auth": "bear",
             },
+            {
+                "path": "/create_user",
+                "endpoint": self.api_create_user,
+                "methods": ["POST"],
+                "summary": "创建 NE 用户",
+                "description": "使用控制室保存的待创建用户参数新增 NE 用户",
+                "auth": "bear",
+            },
+            {
+                "path": "/generate_cards",
+                "endpoint": self.api_generate_cards,
+                "methods": ["POST"],
+                "summary": "生成 AutoCard 卡密",
+                "description": "使用控制室保存的卡密参数生成新批次",
+                "auth": "bear",
+            },
         ]
 
     def api_set_user_filter(self, payload: dict) -> Response:
@@ -141,6 +165,71 @@ class NextEmbyController(_PluginBase):
             return Response(success=True, message=f"用户 {username} 已删除")
         return Response(success=False, message=result)
 
+    def api_create_user(self) -> Response:
+        """按插件配置中保存的参数创建 NE 用户。"""
+        config = self.get_config() or {}
+        username = str(config.get("new_user_username") or "").strip()
+        password = str(config.get("new_user_password") or "").strip()
+        cookies = str(config.get("new_user_cookies") or "").strip()
+        if not username:
+            return Response(success=False, message="请先在插件配置中填写待创建用户名")
+        if not password:
+            return Response(success=False, message="请先在插件配置中填写初始密码")
+        cache_path = str(config.get("new_user_cache_path") or "/最近接收").strip()
+        if not cache_path.startswith("/"):
+            cache_path = f"/{cache_path}"
+        body = {
+            "user": username,
+            "original_user": None,
+            "cookies": cookies,
+            "password": password,
+            "cache_path": cache_path,
+            "transfer_quota": float(config.get("new_user_quota") or 5),
+            "transfer_quota_enabled": bool(config.get("new_user_quota_enabled", True)),
+            "remark": str(config.get("new_user_remark") or "").strip(),
+            "template_user": str(config.get("new_user_template") or "").strip(),
+            "auto_delete_cron": "",
+            "recycle_bin_code": "",
+        }
+        result = self._admin_request_json("POST", "/api/users", body=body)
+        if not result.get("success"):
+            return Response(success=False, message=result.get("message") or "NE 用户创建失败")
+        config["new_user_password"] = ""
+        config["new_user_cookies"] = ""
+        self.update_config(config)
+        return Response(success=True, message=f"NE 用户 {username} 已创建")
+
+    def api_generate_cards(self) -> Response:
+        """按插件配置中保存的参数生成 AutoCard 卡密批次。"""
+        config = self.get_config() or {}
+        try:
+            days = int(config.get("card_duration_days") or 30)
+            count = int(config.get("card_count") or 1)
+        except (TypeError, ValueError):
+            return Response(success=False, message="卡密时长和数量必须为整数")
+        if days < 1 or days > 36500:
+            return Response(success=False, message="卡密时长需在 1 至 36500 天之间")
+        if count < 1 or count > 100:
+            return Response(success=False, message="单次卡密数量需在 1 至 100 张之间")
+        body = {
+            "duration_days": days,
+            "count": count,
+            "template_name": str(config.get("card_template_name") or "").strip(),
+        }
+        result = self._admin_generate_cards(body)
+        if not result.get("success"):
+            return Response(success=False, message=result.get("message") or "卡密生成失败")
+        batch_id = result.get("batch_id") or "未知批次"
+        codes = result.get("codes") or []
+        self.save_data("last_generated_cards", {
+            "batch_id": batch_id,
+            "duration_days": days,
+            "count": len(codes),
+            "codes": codes,
+            "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        })
+        return Response(success=True, message=f"已生成 {len(codes)} 张卡密，批次 {batch_id}")
+
     def get_form(self) -> Tuple[Optional[List[dict]], Dict[str, Any]]:
         """返回插件配置表单与默认配置。"""
         return [
@@ -169,13 +258,78 @@ class NextEmbyController(_PluginBase):
                             "label": "NextEmby API Key（Bearer 密钥）",
                             "type": "password"
                         }
-                    }
+                    },
+                    {
+                        "component": "VAlert",
+                        "props": {
+                            "type": "info",
+                            "variant": "tonal",
+                            "text": "AutoCard 使用 NE 管理后台会话权限。管理员账号和密码仅由插件后端用于登录，不会显示在详情页。"
+                        }
+                    },
+                    {
+                        "component": "VTextField",
+                        "props": {
+                            "model": "admin_username",
+                            "label": "NE 管理员用户名",
+                            "placeholder": "请输入管理后台用户名"
+                        }
+                    },
+                    {
+                        "component": "VTextField",
+                        "props": {
+                            "model": "admin_password",
+                            "label": "NE 管理员密码",
+                            "type": "password",
+                            "placeholder": "请输入管理后台密码"
+                        }
+                    },
+                    {
+                        "component": "VAlert",
+                        "props": {
+                            "type": "info",
+                            "variant": "tonal",
+                            "text": "控制室创建用户：先保存以下参数，再到详情页 Tab3 点击“创建用户”。成功后密码和 Cookie 会自动从配置中清空。"
+                        }
+                    },
+                    {"component": "VTextField", "props": {"model": "new_user_username", "label": "待创建用户名"}},
+                    {"component": "VTextField", "props": {"model": "new_user_password", "label": "初始密码", "type": "password"}},
+                    {"component": "VTextField", "props": {"model": "new_user_cookies", "label": "115 Cookie（可选）", "type": "password"}},
+                    {"component": "VTextField", "props": {"model": "new_user_cache_path", "label": "缓存目录", "placeholder": "/最近接收"}},
+                    {"component": "VTextField", "props": {"model": "new_user_quota", "label": "秒传额度", "type": "number"}},
+                    {"component": "VSwitch", "props": {"model": "new_user_quota_enabled", "label": "启用秒传额度"}},
+                    {"component": "VTextField", "props": {"model": "new_user_template", "label": "模板用户（可选）"}},
+                    {"component": "VTextField", "props": {"model": "new_user_remark", "label": "用户备注（可选）"}},
+                    {
+                        "component": "VAlert",
+                        "props": {
+                            "type": "warning",
+                            "variant": "tonal",
+                            "text": "新增卡密会立即创建真实卡密。先保存时长、数量和模板名，再到详情页 Tab4 点击“生成卡密”。"
+                        }
+                    },
+                    {"component": "VTextField", "props": {"model": "card_duration_days", "label": "卡密时长（天）", "type": "number"}},
+                    {"component": "VTextField", "props": {"model": "card_count", "label": "生成数量（1-100）", "type": "number"}},
+                    {"component": "VTextField", "props": {"model": "card_template_name", "label": "卡密模板名（可选）"}}
                 ]
             }
         ], {
             "enabled": False,
             "api_url": "https://your-server.example.com/api",
-            "api_key": ""
+            "api_key": "",
+            "admin_username": "",
+            "admin_password": "",
+            "new_user_username": "",
+            "new_user_password": "",
+            "new_user_cookies": "",
+            "new_user_cache_path": "/最近接收",
+            "new_user_quota": 5,
+            "new_user_quota_enabled": True,
+            "new_user_template": "",
+            "new_user_remark": "",
+            "card_duration_days": 30,
+            "card_count": 1,
+            "card_template_name": ""
         }
 
     def get_page(self) -> Optional[List[dict]]:
@@ -516,6 +670,28 @@ class NextEmbyController(_PluginBase):
 
         # ============ Tab3 用户管理面板 ============
         tab3_nodes = [page_header("Tab3 · 用户管理", 3, 4)]
+        create_user_config = self.get_config() or {}
+        pending_username = str(create_user_config.get("new_user_username") or "").strip()
+        tab3_nodes.append({
+            "component": "div",
+            "props": {"class": "d-flex flex-wrap align-center justify-space-between ga-2 mb-2"},
+            "content": [
+                {
+                    "component": "span",
+                    "props": {"class": "text-caption text-medium-emphasis"},
+                    "text": f"待创建：{pending_username or '请先在插件配置填写用户参数'}"
+                },
+                {
+                    "component": "VBtn",
+                    "props": {
+                        "color": "primary", "variant": "tonal", "size": "small",
+                        "prepend-icon": "mdi-account-plus", "disabled": not bool(pending_username)
+                    },
+                    "text": "创建用户",
+                    "events": {"click": {"api": "plugin/NextEmbyController/create_user", "method": "POST"}}
+                }
+            ]
+        })
         if users_error:
             tab3_nodes.append({
                 "component": "VAlert", "props": {"type": "error", "text": f"获取用户列表失败：{users_error}"}
@@ -668,15 +844,96 @@ class NextEmbyController(_PluginBase):
 
         # ============ Tab4 AutoCard 开卡面板 ============
         tab4_nodes = [page_header("Tab4 · AutoCard 开卡", 4, 4)]
+        admin_probe = self._probe_admin_autocard()
+        probe_ok = bool(admin_probe.get("login_ok"))
+        batches = admin_probe.get("batches") or []
+        history = admin_probe.get("history") or []
         tab4_nodes.append({
             "component": "VAlert",
-            "props": {"type": "info", "text": "NextEmby 后端 API 当前未提供开卡/卡券相关接口，此面板暂不可用。"}
+            "props": {
+                "type": "success" if probe_ok else "warning",
+                "variant": "tonal",
+                "text": admin_probe.get("message") or "尚未配置 NE 管理员登录信息。"
+            }
         })
-        tab4_nodes.append({
-            "component": "div",
-            "props": {"class": "text-body-2 text-medium-emphasis pa-4"},
-            "text": "待 NE 后端开放 AutoCard 接口后可在此接入：时长/数量/模板选择生成卡券，卡券列表、批次号、展开详情与删除。"
-        })
+        if probe_ok:
+            card_config = self.get_config() or {}
+            card_days = int(card_config.get("card_duration_days") or 30)
+            card_count = int(card_config.get("card_count") or 1)
+            card_template = str(card_config.get("card_template_name") or "").strip()
+            tab4_nodes.append({
+                "component": "div",
+                "props": {"class": "d-flex flex-wrap align-center justify-space-between ga-2 mt-2"},
+                "content": [
+                    {
+                        "component": "span",
+                        "props": {"class": "text-caption text-medium-emphasis"},
+                        "text": f"新增参数：{card_days} 天 × {card_count} 张" + (f" · {card_template}" if card_template else "")
+                    },
+                    {
+                        "component": "VBtn",
+                        "props": {"color": "deep-orange", "variant": "tonal", "size": "small", "prepend-icon": "mdi-card-plus"},
+                        "text": "生成卡密",
+                        "events": {"click": {"api": "plugin/NextEmbyController/generate_cards", "method": "POST"}}
+                    }
+                ]
+            })
+            last_generated = self.get_data("last_generated_cards") or {}
+            if last_generated:
+                masked_codes = "、".join(self._mask_card_code(x) for x in (last_generated.get("codes") or [])[:5])
+                tab4_nodes.append({
+                    "component": "VAlert",
+                    "props": {
+                        "type": "info", "variant": "tonal",
+                        "text": f"最近生成：批次 {last_generated.get('batch_id') or '-'} · {last_generated.get('count') or 0} 张 · {last_generated.get('created_at') or '-'}" + (f" · {masked_codes}" if masked_codes else "")
+                    }
+                })
+            total_cards = sum(int(x.get("total") or 0) for x in batches)
+            remaining_cards = sum(int(x.get("remaining") or 0) for x in batches)
+            tab4_nodes.append({
+                "component": "VRow",
+                "props": {"dense": True, "class": "mx-0 mt-1"},
+                "content": [
+                    stat_card("卡密批次", str(len(batches)), "deep-orange"),
+                    stat_card("剩余卡密", str(remaining_cards), "success"),
+                    stat_card("累计卡密", str(total_cards), "primary"),
+                    stat_card("使用记录", str(len(history)), "purple"),
+                ]
+            })
+            tab4_nodes.append({
+                "component": "VList",
+                "props": {"density": "compact", "class": "mt-2"},
+                "content": [
+                    {
+                        "component": "VListItem",
+                        "props": {
+                            "title": f"{('永久' if int(item.get('duration_days') or 0) == 0 or int(item.get('duration_days') or 0) >= 999 else str(item.get('duration_days')) + ' 天')} · {item.get('template_name') or '默认模板'}",
+                            "subtitle": f"剩余 {item.get('remaining') or 0}/{item.get('total') or 0} · 批次 {item.get('batch_id') or '-'}"
+                        }
+                    }
+                    for item in batches[:20]
+                ] or [{"component": "VListItem", "props": {"title": "暂无卡密批次"}}]
+            })
+            if history:
+                tab4_nodes.append({
+                    "component": "div",
+                    "props": {"class": "text-caption font-weight-medium mt-2 mb-1"},
+                    "text": "最近使用记录"
+                })
+                tab4_nodes.append({
+                    "component": "VList",
+                    "props": {"density": "compact"},
+                    "content": [
+                        {
+                            "component": "VListItem",
+                            "props": {
+                                "title": f"{item.get('used_by') or '未知用户'} · {item.get('duration_days') or 0} 天",
+                                "subtitle": f"{item.get('used_at') or '-'} · {self._mask_card_code(item.get('card_code'))}"
+                            }
+                        }
+                        for item in history[:10]
+                    ]
+                })
 
         # ============ 组装 4 Tab ============
         def window_item(value: str, nodes: list) -> dict:
@@ -730,6 +987,153 @@ class NextEmbyController(_PluginBase):
         ]
 
     # ==================== NE API 调用方法 ====================
+
+    def _admin_host(self) -> str:
+        """从开放 API 地址推导 NE 管理后台主机地址。"""
+        return self._api_url.rsplit("/api", 1)[0].rstrip("/") if self._api_url else ""
+
+    @staticmethod
+    def _mask_card_code(card_code: Any) -> str:
+        """遮盖卡密，仅保留首尾少量字符供用户辨认。"""
+        code = str(card_code or "")
+        if len(code) <= 8:
+            return "****"
+        return f"{code[:4]}****{code[-4:]}"
+
+    def _admin_login_session(self) -> Tuple[Optional[requests.Session], str]:
+        """登录 NE 管理后台并返回带会话 Cookie 的请求会话。"""
+        if not self._admin_username or not self._admin_password:
+            return None, "请先配置 NE 管理员用户名和密码"
+        host = self._admin_host()
+        if not host:
+            return None, "无法从 API 地址推导 NE 管理后台地址"
+        session = requests.Session()
+        session.trust_env = False
+        try:
+            response = session.post(
+                f"{host}/api/admin/login",
+                json={"username": self._admin_username, "password": self._admin_password},
+                timeout=15,
+            )
+            if response.status_code == 200:
+                return session, ""
+            try:
+                detail = str((response.json() or {}).get("detail") or "")
+            except (ValueError, TypeError):
+                detail = response.text[:120]
+            session.close()
+            return None, f"NE 管理后台登录失败：HTTP {response.status_code} {detail}".strip()
+        except requests.RequestException as err:
+            session.close()
+            return None, f"NE 管理后台连接失败：{err}"
+
+    def _admin_request_json(self, method: str, path: str, body: Optional[dict] = None) -> Dict[str, Any]:
+        """使用 NE 管理会话调用 JSON 接口。"""
+        session, error = self._admin_login_session()
+        if not session:
+            return {"success": False, "message": error}
+        try:
+            response = session.request(method, f"{self._admin_host()}{path}", json=body, timeout=30)
+            try:
+                data = response.json()
+            except ValueError:
+                data = {}
+            if response.ok:
+                return {"success": True, "data": data}
+            message = data.get("detail") or data.get("message") if isinstance(data, dict) else ""
+            return {"success": False, "message": str(message or f"HTTP {response.status_code}")}
+        except requests.RequestException as err:
+            return {"success": False, "message": f"NE 管理请求失败：{err}"}
+        finally:
+            session.close()
+
+    def _admin_generate_cards(self, body: dict) -> Dict[str, Any]:
+        """调用 NE 流式接口生成卡密并解析批次及卡密列表。"""
+        session, error = self._admin_login_session()
+        if not session:
+            return {"success": False, "message": error}
+        try:
+            response = session.post(
+                f"{self._admin_host()}/api/admin/cards/generate",
+                json=body,
+                timeout=60,
+                stream=True,
+            )
+            if not response.ok:
+                try:
+                    data = response.json()
+                except ValueError:
+                    data = {}
+                return {"success": False, "message": str(data.get("detail") or data.get("message") or f"HTTP {response.status_code}")}
+            batch_id = ""
+            codes = []
+            for raw_line in response.iter_lines(decode_unicode=True):
+                line = str(raw_line or "").strip()
+                if not line:
+                    continue
+                if line.startswith("BATCH_ID:"):
+                    batch_id = line[9:].strip()
+                else:
+                    codes.append(line)
+            if not batch_id or not codes:
+                return {"success": False, "message": "NE 未返回完整的卡密批次数据"}
+            return {"success": True, "batch_id": batch_id, "codes": codes}
+        except requests.RequestException as err:
+            return {"success": False, "message": f"NE 卡密生成请求失败：{err}"}
+        finally:
+            session.close()
+
+    def _probe_admin_autocard(self) -> Dict[str, Any]:
+        """登录 NE 管理后台并读取 AutoCard 批次及使用历史。"""
+        empty = {"login_ok": False, "batches": [], "history": []}
+        if not self._admin_username or not self._admin_password:
+            return {**empty, "message": "请先在插件配置中填写 NE 管理员用户名和密码。"}
+        host = self._admin_host()
+        if not host:
+            return {**empty, "message": "无法从 API 地址推导 NE 管理后台地址。"}
+        session = requests.Session()
+        session.trust_env = False
+        try:
+            response = session.post(
+                f"{host}/api/admin/login",
+                json={"username": self._admin_username, "password": self._admin_password},
+                timeout=15,
+            )
+            if response.status_code != 200:
+                detail = ""
+                try:
+                    detail = str((response.json() or {}).get("detail") or "")
+                except Exception:
+                    detail = response.text[:120]
+                return {
+                    **empty,
+                    "message": f"NE 管理后台登录失败：HTTP {response.status_code} {detail}".strip(),
+                }
+            batches_res = session.get(f"{host}/api/admin/cards/batches", timeout=15)
+            history_res = session.get(f"{host}/api/admin/cards/history", timeout=15)
+            batches_json = batches_res.json() if batches_res.status_code == 200 else {}
+            history_json = history_res.json() if history_res.status_code == 200 else {}
+            batches = batches_json.get("data") if isinstance(batches_json, dict) else []
+            history = history_json.get("data") if isinstance(history_json, dict) else []
+            batches = batches if isinstance(batches, list) else []
+            history = history if isinstance(history, list) else []
+            if batches_res.status_code != 200 or history_res.status_code != 200:
+                return {
+                    "login_ok": True,
+                    "batches": batches,
+                    "history": history,
+                    "message": f"NE 管理后台登录成功，但 AutoCard 数据读取不完整：批次 HTTP {batches_res.status_code}，历史 HTTP {history_res.status_code}。",
+                }
+            return {
+                "login_ok": True,
+                "batches": batches,
+                "history": history,
+                "message": f"NE 管理后台登录成功，AutoCard 管理权限可用；已读取 {len(batches)} 个批次、{len(history)} 条使用记录。",
+            }
+        except (requests.RequestException, ValueError) as err:
+            return {**empty, "message": f"NE AutoCard 管理请求失败：{err}"}
+        finally:
+            session.close()
 
     def _request(self, method: str, path: str, params: dict = None, body: dict = None) -> str:
         """发起 NE API 请求并返回格式化结果。"""
